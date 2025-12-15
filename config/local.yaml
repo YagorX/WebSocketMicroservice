@@ -1,0 +1,15 @@
+env: "local"
+port: "41041"
+auth:
+  address: "localhost:44044"
+  timeout: 5s
+  retriesCount: 5  
+  insecure: false
+
+websocket:
+  urlws: "localhost:52052"
+  timeout: 5s
+
+neuralclient:
+  URLNeural: "ws://localhost:8000/inference/batching"
+  timeout: 10s
