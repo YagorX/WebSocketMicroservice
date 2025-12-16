@@ -1,5 +1,7 @@
 env: "local"
 port: "41041"
+db_url: "postgres://postgres:postgres@localhost:55432/chatdb?sslmode=disable"
+
 auth:
   address: "localhost:44044"
   timeout: 5s

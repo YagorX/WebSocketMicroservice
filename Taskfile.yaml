@@ -1,0 +1,19 @@
+version: "3"
+
+vars:
+  DB_URL: "postgres://postgres:postgres@localhost:55432/chatdb?sslmode=disable"
+  MIGRATIONS_PATH: "./migrations"
+  ENV: "development"
+
+tasks:
+  migrate:
+    desc: "Apply database migrations"
+    cmds:
+      - echo "Applying migrations..."
+      - go run ./cmd/migrator --database-url={{.DB_URL}} --migrations-path={{.MIGRATIONS_PATH}}
+
+  run:
+    desc: "Run the WS server"
+    cmds:
+      - echo "Starting WS server..."
+      - go run ./cmd/ws/main.go -config ./config/local.yaml

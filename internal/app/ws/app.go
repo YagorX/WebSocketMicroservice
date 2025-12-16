@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	httpHandlers "MicroserviceWebsocket/internal/server/http"
+
 	"golang.org/x/exp/slog"
 )
 
@@ -16,6 +18,7 @@ type App struct {
 	log       *slog.Logger
 	server    *http.Server
 	wsHandler *handlers.WebSocketHandler
+	httpAPI   *httpHandlers.API
 	config    *config.Config
 }
 
@@ -23,10 +26,12 @@ func New(
 	log *slog.Logger,
 	cfg *config.Config,
 	wsHandler *handlers.WebSocketHandler,
+	httpAPI *httpHandlers.API,
 ) *App {
 	// Создаем HTTP сервер с WebSocket хендлером
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", wsHandler.HandleConnection)
+
 	mux.HandleFunc("/health", healthHandler)
 
 	server := &http.Server{
@@ -40,6 +45,7 @@ func New(
 		log:       log,
 		server:    server,
 		wsHandler: wsHandler,
+		httpAPI:   httpAPI,
 		config:    cfg,
 	}
 }

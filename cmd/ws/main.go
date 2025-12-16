@@ -5,7 +5,9 @@ import (
 	"MicroserviceWebsocket/internal/config"
 	"MicroserviceWebsocket/internal/lib/logger/handlers/slogpretty"
 	"MicroserviceWebsocket/internal/server/handlers"
+	"MicroserviceWebsocket/internal/server/http"
 	"MicroserviceWebsocket/internal/services/neural"
+	"MicroserviceWebsocket/internal/storage/postgresql"
 	"os"
 	"os/signal"
 	"syscall"
@@ -42,9 +44,16 @@ func main() {
 	// 	log.Error("error with launch authclient")
 	// }
 
+	//создание бд, да плохо
+	storage, err := postgresql.New(cfg.DB_URL, log)
+	if err != nil {
+		panic(err)
+	}
+	httpApi := http.NewAPI(log, storage)
 	// wsHandler := handlers.NewWebSocketHandler(*authClient, neuralClient)
 	wsHandler := handlers.NewWebSocketHandler(neuralClient)
-	app := ws.New(log, cfg, wsHandler)
+	//здесь создание создание http.Api handler
+	app := ws.New(log, cfg, wsHandler, httpApi)
 
 	go app.MustRun()
 

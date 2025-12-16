@@ -11,6 +11,7 @@ import (
 type Config struct {
 	ENV          string         `yaml:"env" env-default:"local"`
 	PORT         string         `yaml:"port"`
+	DB_URL       string         `yaml:"db_url"`
 	AUTH         AuthGRPCConfig `yaml:"auth"`
 	WEBSOCKET    WebSocket      `yaml:"websocket"`
 	NEURALCLIENT NeuralClient   `yaml:"neuralclient"`

@@ -92,7 +92,7 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 
 		// 3. Обработка сообщения
 		// go h.handleMessage(conn, message)
-		h.handleMessage(conn, message)
+		go h.handleMessage(conn, message)
 	}
 }
 
