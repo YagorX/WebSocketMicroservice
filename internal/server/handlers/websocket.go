@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	_ "MicroserviceWebsocket/internal/services/batch"
 	"MicroserviceWebsocket/internal/services/neural"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -19,9 +21,14 @@ const (
 	pingPeriod = 15 * time.Second
 )
 
+type Storage interface {
+	InsertUserMessage(ctx context.Context, chatUUID, messageUUID, content string) error
+	InsertBotMessage(ctx context.Context, chatUUID, messageUUID, content, replyToUUID string) error
+}
+
 type WebSocketHandler struct {
-	// authClient   auth.Client
 	neuralClient *neural.Client
+	storage      Storage
 }
 
 var upgrader = websocket.Upgrader{
@@ -33,17 +40,8 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// func NewWebSocketHandler(authClient auth.Client, neuralClient *neural.Client) *WebSocketHandler {
-// 	return &WebSocketHandler{
-// 		authClient:   authClient,
-// 		neuralClient: neuralClient,
-// 	}
-// }
-
-func NewWebSocketHandler(neuralClient *neural.Client) *WebSocketHandler {
-	return &WebSocketHandler{
-		neuralClient: neuralClient,
-	}
+func NewWebSocketHandler(neuralClient *neural.Client, storage Storage) *WebSocketHandler {
+	return &WebSocketHandler{neuralClient: neuralClient, storage: storage}
 }
 
 func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
@@ -92,36 +90,89 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 
 		// 3. Обработка сообщения
 		// go h.handleMessage(conn, message)
-		go h.handleMessage(conn, message)
+		h.handleMessage(conn, message)
 	}
 }
 
+// func (h *WebSocketHandler) handleMessage(conn *websocket.Conn, msg []byte) {
+// 	const op = "WebSocketHandler.handleMessage"
+// 	// Валидация формата
+// 	request, err := validateMessage(string(msg))
+// 	if err != nil {
+// 		log.Print(fmt.Errorf("%w: %s", err, op))
+// 		return
+// 	}
+
+// 	// Аутентификация через Auth сервис
+// 	// здесь userid не учитываем так как происходит проверка внутри на то что пользователь с данным userid существует в бд
+// 	// _, err = h.authClient.ValidateToken(context.Background(), request.Token)
+// 	// if err != nil {
+// 	// 	log.Print(fmt.Errorf("%w: %s", err, op))
+// 	// 	return
+// 	// }
+
+// 	// Передача в сервисный слой
+// 	result, err := h.neuralClient.ProcessSingle(request)
+// 	fmt.Println(request)
+// 	if err != nil {
+// 		log.Print(fmt.Errorf("%w: %s", err, op))
+// 		return
+// 	}
+
+// 	conn.WriteJSON(result)
+// }
+
 func (h *WebSocketHandler) handleMessage(conn *websocket.Conn, msg []byte) {
 	const op = "WebSocketHandler.handleMessage"
-	// Валидация формата
+
 	request, err := validateMessage(string(msg))
 	if err != nil {
 		log.Print(fmt.Errorf("%w: %s", err, op))
 		return
 	}
 
-	// Аутентификация через Auth сервис
-	// здесь userid не учитываем так как происходит проверка внутри на то что пользователь с данным userid существует в бд
-	// _, err = h.authClient.ValidateToken(context.Background(), request.Token)
-	// if err != nil {
-	// 	log.Print(fmt.Errorf("%w: %s", err, op))
-	// 	return
-	// }
-
-	// Передача в сервисный слой
-	result, err := h.neuralClient.ProcessSingle(request)
-	fmt.Println(request)
-	if err != nil {
-		log.Print(fmt.Errorf("%w: %s", err, op))
+	// validate UUIDs
+	if _, err := uuid.Parse(request.ChatUUID); err != nil {
+		_ = conn.WriteJSON(map[string]any{"error": "validation_error", "msg": "chat_uuid must be uuid"})
+		return
+	}
+	if _, err := uuid.Parse(request.UUID); err != nil {
+		_ = conn.WriteJSON(map[string]any{"error": "validation_error", "msg": "uuid must be uuid"})
 		return
 	}
 
-	conn.WriteJSON(result)
+	// 1) save user message
+	if err := h.storage.InsertUserMessage(context.Background(), request.ChatUUID, request.UUID, request.Message); err != nil {
+		_ = conn.WriteJSON(map[string]any{"error": "db_error", "msg": err.Error()})
+		return
+	}
+
+	// 2) neural
+	result, err := h.neuralClient.ProcessSingle(request)
+	if err != nil {
+		_ = conn.WriteJSON(map[string]any{"error": "neural_error", "msg": err.Error()})
+		return
+	}
+
+	// 3) save bot message
+	botUUID := uuid.NewString()
+	if err := h.storage.InsertBotMessage(context.Background(), request.ChatUUID, botUUID, result.Response, request.UUID); err != nil {
+		_ = conn.WriteJSON(map[string]any{"error": "db_error", "msg": err.Error()})
+		return
+	}
+
+	resp := models.WSBotMessage{
+		Type:            "bot_message",
+		ChatUUID:        request.ChatUUID,
+		UserMessageUUID: request.UUID,
+		BotMessageUUID:  botUUID,
+		Response:        result.Response,
+		CreatedAt:       result.CreatedAt,
+	}
+
+	if err := conn.WriteJSON(resp); err != nil {
+		log.Printf("write ws json error: %v", err)
+	}
 }
 
 func validateMessage(msgStr string) (models.Request, error) {

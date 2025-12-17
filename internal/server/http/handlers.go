@@ -1,10 +1,13 @@
 package http
 
 import (
-	models "MicroserviceWebsocket/internal/domain"
 	"encoding/json"
 	"net/http"
 	"strconv"
+
+	"github.com/google/uuid"
+
+	models "MicroserviceWebsocket/internal/domain"
 )
 
 func (a *API) createChat(w http.ResponseWriter, r *http.Request) {
@@ -13,14 +16,25 @@ func (a *API) createChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_json", "invalid json body")
 		return
 	}
-	if req.UserID <= 0 || req.ModelName == "" || req.ModelVersion == "" || req.FirstMessage == "" {
+
+	// обязательные поля
+	if req.UserID <= 0 || req.ModelName == "" || req.ModelVersion == "" {
 		writeErr(w, http.StatusBadRequest, "validation_error", "required fields: user_id, model_name, model_version, first_message")
 		return
 	}
 
+	// если фронт прислал chat_uuid — проверим что это UUID
+	if req.ChatUUID != "" {
+		if _, err := uuid.Parse(req.ChatUUID); err != nil {
+			writeErr(w, http.StatusBadRequest, "validation_error", "chat_uuid must be a valid uuid")
+			return
+		}
+	}
+
+	print("popitka create chat")
+
 	resp, err := a.svc.CreateChat(r.Context(), req)
 	if err != nil {
-		// тут ты маппишь доменные ошибки на http
 		switch err {
 		case ErrModelNotFound:
 			writeErr(w, http.StatusNotFound, "model_not_found", "model not found")
@@ -37,7 +51,7 @@ func (a *API) listChats(w http.ResponseWriter, r *http.Request) {
 	userIDStr := r.URL.Query().Get("user_id")
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil || userID <= 0 {
-		writeErr(w, http.StatusBadRequest, "validation_error", "query user_id is required and must be int")
+		writeErr(w, http.StatusBadRequest, "validation_error", "query user_id is required and must be int64")
 		return
 	}
 
@@ -51,10 +65,16 @@ func (a *API) listChats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listMessages(w http.ResponseWriter, r *http.Request, chatID string) {
+	// chatID сейчас UUID строкой
+	if _, err := uuid.Parse(chatID); err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "chat_id must be a valid uuid")
+		return
+	}
+
 	userIDStr := r.URL.Query().Get("user_id") // лучше из токена, но пока так
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil || userID <= 0 {
-		writeErr(w, http.StatusBadRequest, "validation_error", "query user_id is required and must be int")
+		writeErr(w, http.StatusBadRequest, "validation_error", "query user_id is required and must be int64")
 		return
 	}
 
@@ -75,10 +95,16 @@ func (a *API) listMessages(w http.ResponseWriter, r *http.Request, chatID string
 }
 
 func (a *API) deleteChat(w http.ResponseWriter, r *http.Request, chatID string) {
+	// chatID сейчас UUID строкой
+	if _, err := uuid.Parse(chatID); err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "chat_id must be a valid uuid")
+		return
+	}
+
 	userIDStr := r.URL.Query().Get("user_id")
 	userID, err := strconv.ParseInt(userIDStr, 10, 64)
 	if err != nil || userID <= 0 {
-		writeErr(w, http.StatusBadRequest, "validation_error", "query user_id is required and must be int")
+		writeErr(w, http.StatusBadRequest, "validation_error", "query user_id is required and must be int64")
 		return
 	}
 
@@ -99,6 +125,12 @@ func (a *API) deleteChat(w http.ResponseWriter, r *http.Request, chatID string) 
 }
 
 func (a *API) feedback(w http.ResponseWriter, r *http.Request, messageID string) {
+	// messageID сейчас UUID строкой
+	if _, err := uuid.Parse(messageID); err != nil {
+		writeErr(w, http.StatusBadRequest, "validation_error", "message_id must be a valid uuid")
+		return
+	}
+
 	var req models.FeedbackReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_json", "invalid json body")

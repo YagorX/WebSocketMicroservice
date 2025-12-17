@@ -1,7 +1,6 @@
 package http
 
 import (
-	models "MicroserviceWebsocket/internal/domain"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +8,8 @@ import (
 	"strings"
 
 	"golang.org/x/exp/slog"
+
+	models "MicroserviceWebsocket/internal/domain"
 )
 
 var (
@@ -78,7 +79,7 @@ func (a *API) ChatByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chatID := parts[0]
+	chatID := parts[0] // это chat_uuid
 
 	// /chats/{id}/messages
 	if len(parts) == 2 && parts[1] == "messages" {
@@ -113,6 +114,6 @@ func (a *API) MessageByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messageID := parts[0]
+	messageID := parts[0] // это message_uuid
 	a.feedback(w, r, messageID)
 }

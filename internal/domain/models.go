@@ -6,9 +6,10 @@ type BatchItem struct {
 }
 
 type Request struct {
-	UUID      string `json:"uuid"`
+	UUID      string `json:"uuid"` // сообщения
 	ModelName string `json:"model_name"`
 	Message   string `json:"message"`
+	ChatUUID  string `json:"chat_uuid"`
 }
 
 type Response struct {
@@ -24,28 +25,34 @@ type WSPong struct {
 	Type string `json:"type"` // "pong"
 }
 
-// for http methods
+type WSBotMessage struct {
+	Type            string `json:"type"`
+	ChatUUID        string `json:"chat_uuid"`
+	UserMessageUUID string `json:"user_message_uuid"`
+	BotMessageUUID  string `json:"bot_message_uuid"`
+	Response        string `json:"response"`
+	CreatedAt       string `json:"created_at"`
+}
 
-// ---------- 2.1 POST /chats ----------
+// -------------------- HTTP models --------------------
 
+// ---------- POST /chats ----------
 type CreateChatReq struct {
+	ChatUUID     string `json:"chat_uuid"`
 	UserID       int64  `json:"user_id"`
 	ModelName    string `json:"model_name"`
 	ModelVersion string `json:"model_version"`
-	FirstMessage string `json:"first_message"`
+	Title        string `json:"title"`
 }
-
 type CreateChatResp struct {
-	ChatID        string `json:"chat_id"`
-	UserMessageID string `json:"user_message_id"`
+	ChatUUID string `json:"chat_uuid"`
 }
 
-// ---------- 2.2 GET /chats?user_id=123 ----------
-
+// ---------- GET /chats?user_id=123 ----------
 type ChatItem struct {
-	ID        string `json:"id"`
+	ID        string `json:"id"` // chat_uuid
 	Title     string `json:"title"`
-	ModelID   string `json:"model_id"`
+	ModelID   int64  `json:"model_id"` // bot_models.id (BIGINT)
 	UpdatedAt string `json:"updated_at"`
 }
 
@@ -53,10 +60,9 @@ type ListChatsResp struct {
 	Items []ChatItem `json:"items"`
 }
 
-// ---------- 2.3 GET /chats/{chat_id}/messages ----------
-
+// ---------- GET /chats/{chat_id}/messages ----------
 type MessageItem struct {
-	ID               string `json:"id"`
+	ID               string `json:"id"`   // message_uuid
 	Role             string `json:"role"` // user|bot
 	Content          string `json:"content"`
 	CreatedAt        string `json:"created_at"`
@@ -64,18 +70,17 @@ type MessageItem struct {
 }
 
 type ListMessagesResp struct {
-	ChatID string        `json:"chat_id"`
+	ChatID string        `json:"chat_id"` // chat_uuid
 	Items  []MessageItem `json:"items"`
 }
 
-// ---------- 2.5 POST /messages/{message_id}/feedback ----------
-
+// ---------- POST /messages/{message_id}/feedback ----------
 type FeedbackReq struct {
 	UserID     int64 `json:"user_id"`
 	IsPositive bool  `json:"is_positive"`
 }
 
 type FeedbackResp struct {
-	MessageID  string `json:"message_id"`
+	MessageID  string `json:"message_id"` // message_uuid
 	IsPositive bool   `json:"is_positive"`
 }

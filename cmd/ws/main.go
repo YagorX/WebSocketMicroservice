@@ -29,8 +29,14 @@ func main() {
 	log := setupLogger(cfg.ENV)
 
 	// TODO: инициализировать приложение (app)
+
+	storage, err := postgresql.New(cfg.DB_URL, log)
+	if err != nil {
+		panic(err)
+	}
+
 	//инициализация подключения к беку
-	neuralClient := neural.NewClient(cfg.NEURALCLIENT.URLNeural, cfg.NEURALCLIENT.Timeout)
+	neuralClient := neural.NewClient(cfg.NEURALCLIENT.URLNeural, cfg.NEURALCLIENT.Timeout, storage)
 	log.Info("Neural service activate")
 
 	//инициализация подключения к auth
@@ -45,13 +51,9 @@ func main() {
 	// }
 
 	//создание бд, да плохо
-	storage, err := postgresql.New(cfg.DB_URL, log)
-	if err != nil {
-		panic(err)
-	}
 	httpApi := http.NewAPI(log, storage)
 	// wsHandler := handlers.NewWebSocketHandler(*authClient, neuralClient)
-	wsHandler := handlers.NewWebSocketHandler(neuralClient)
+	wsHandler := handlers.NewWebSocketHandler(neuralClient, storage)
 	//здесь создание создание http.Api handler
 	app := ws.New(log, cfg, wsHandler, httpApi)
 

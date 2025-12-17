@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/exp/slog"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	models "MicroserviceWebsocket/internal/domain"
@@ -31,7 +32,6 @@ func New(databaseURL string, log *slog.Logger) (*Storage, error) {
 		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
-	// ВАЖНО: проверить соединение сразу
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("%s: ping failed: %w", op, err)
 	}
@@ -50,7 +50,6 @@ func titleFromFirstMessage(s string) string {
 		return "New chat"
 	}
 
-	// "первое предложение": до . ! ? или \n, либо первые 80 символов
 	cut := len(s)
 	for _, sep := range []string{".", "!", "?", "\n"} {
 		if i := strings.Index(s, sep); i >= 0 && i < cut {
@@ -77,7 +76,7 @@ func (s *Storage) CreateChat(ctx context.Context, req models.CreateChatReq) (mod
 	defer func() { _ = tx.Rollback() }()
 
 	// 1) model_id
-	var modelID string
+	var modelID int64
 	err = tx.QueryRowContext(ctx, `
 		SELECT id
 		FROM bot_models
@@ -90,42 +89,40 @@ func (s *Storage) CreateChat(ctx context.Context, req models.CreateChatReq) (mod
 		return models.CreateChatResp{}, err
 	}
 
-	// 2) insert chat
-	title := titleFromFirstMessage(req.FirstMessage)
-	var chatID string
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO chats (user_id, model_id, title)
-		VALUES ($1, $2, $3)
-		RETURNING id
-	`, req.UserID, modelID, title).Scan(&chatID)
+	// 2) chat_uuid (ожидаем от фронта)
+	chatUUID := strings.TrimSpace(req.ChatUUID)
+	if chatUUID == "" {
+		return models.CreateChatResp{}, fmt.Errorf("chat_uuid is required")
+	}
+	if _, err := uuid.Parse(chatUUID); err != nil {
+		return models.CreateChatResp{}, fmt.Errorf("invalid chat_uuid: %w", err)
+	}
+
+	// 3) title (обрезанный текст от фронта)
+	title := titleFromFirstMessage(req.Title)
+	if title == "" {
+		title = "New chat"
+	}
+
+	// 4) insert chat only
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO chats (chat_uuid, user_id, model_id, title)
+		VALUES ($1::uuid, $2, $3, $4)
+	`, chatUUID, req.UserID, modelID, title)
 	if err != nil {
 		return models.CreateChatResp{}, err
 	}
-
-	// 3) insert first user message
-	var userMessageID string
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO messages (chat_id, role, content)
-		VALUES ($1, 'user', $2)
-		RETURNING id
-	`, chatID, req.FirstMessage).Scan(&userMessageID)
-	if err != nil {
-		return models.CreateChatResp{}, err
-	}
-
-	// 4) bump chat.updated_at (на случай если не будет триггера)
-	_, _ = tx.ExecContext(ctx, `UPDATE chats SET updated_at = NOW() WHERE id = $1`, chatID)
 
 	if err := tx.Commit(); err != nil {
 		return models.CreateChatResp{}, err
 	}
 
-	return models.CreateChatResp{ChatID: chatID, UserMessageID: userMessageID}, nil
+	return models.CreateChatResp{ChatUUID: chatUUID}, nil
 }
 
 func (s *Storage) ListChats(ctx context.Context, userID int64) (models.ListChatsResp, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, model_id, updated_at
+		SELECT chat_uuid, title, model_id, updated_at
 		FROM chats
 		WHERE user_id = $1 AND is_deleted = FALSE
 		ORDER BY updated_at DESC
@@ -152,15 +149,15 @@ func (s *Storage) ListChats(ctx context.Context, userID int64) (models.ListChats
 	return resp, nil
 }
 
-func (s *Storage) ListMessages(ctx context.Context, userID int64, chatID string) (models.ListMessagesResp, error) {
+func (s *Storage) ListMessages(ctx context.Context, userID int64, chatUUID string) (models.ListMessagesResp, error) {
 	// 1) check chat exists and belongs
 	var owner int64
 	var isDeleted bool
 	err := s.db.QueryRowContext(ctx, `
 		SELECT user_id, is_deleted
 		FROM chats
-		WHERE id = $1
-	`, chatID).Scan(&owner, &isDeleted)
+		WHERE chat_uuid = $1::uuid
+	`, chatUUID).Scan(&owner, &isDeleted)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.ListMessagesResp{}, httpAPI.ErrChatNotFound
@@ -176,17 +173,17 @@ func (s *Storage) ListMessages(ctx context.Context, userID int64, chatID string)
 
 	// 2) list messages
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, role, content, created_at, reply_to_message_id
+		SELECT message_uuid, role, content, created_at, reply_to_message_id
 		FROM messages
-		WHERE chat_id = $1 AND is_deleted = FALSE
+		WHERE chat_uuid = $1::uuid AND is_deleted = FALSE
 		ORDER BY created_at ASC
-	`, chatID)
+	`, chatUUID)
 	if err != nil {
 		return models.ListMessagesResp{}, err
 	}
 	defer rows.Close()
 
-	resp := models.ListMessagesResp{ChatID: chatID, Items: make([]models.MessageItem, 0, 64)}
+	resp := models.ListMessagesResp{ChatID: chatUUID, Items: make([]models.MessageItem, 0, 64)}
 	for rows.Next() {
 		var it models.MessageItem
 		var created time.Time
@@ -207,7 +204,7 @@ func (s *Storage) ListMessages(ctx context.Context, userID int64, chatID string)
 	return resp, nil
 }
 
-func (s *Storage) DeleteChat(ctx context.Context, userID int64, chatID string) error {
+func (s *Storage) DeleteChat(ctx context.Context, userID int64, chatUUID string) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
@@ -218,17 +215,20 @@ func (s *Storage) DeleteChat(ctx context.Context, userID int64, chatID string) e
 	res, err := tx.ExecContext(ctx, `
 		UPDATE chats
 		SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND user_id = $2 AND is_deleted = FALSE
-	`, chatID, userID)
+		WHERE chat_uuid = $1::uuid AND user_id = $2 AND is_deleted = FALSE
+	`, chatUUID, userID)
 	if err != nil {
 		return err
 	}
 	aff, _ := res.RowsAffected()
 	if aff == 0 {
-		// либо нет чата, либо чужой, либо уже удалён -> для API удобнее различать:
 		var owner int64
 		var isDel bool
-		err := tx.QueryRowContext(ctx, `SELECT user_id, is_deleted FROM chats WHERE id=$1`, chatID).Scan(&owner, &isDel)
+		err := tx.QueryRowContext(ctx, `
+			SELECT user_id, is_deleted
+			FROM chats
+			WHERE chat_uuid = $1::uuid
+		`, chatUUID).Scan(&owner, &isDel)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return httpAPI.ErrChatNotFound
@@ -245,8 +245,8 @@ func (s *Storage) DeleteChat(ctx context.Context, userID int64, chatID string) e
 	_, err = tx.ExecContext(ctx, `
 		UPDATE messages
 		SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW()
-		WHERE chat_id = $1 AND is_deleted = FALSE
-	`, chatID)
+		WHERE chat_uuid = $1::uuid AND is_deleted = FALSE
+	`, chatUUID)
 	if err != nil {
 		return err
 	}
@@ -254,7 +254,7 @@ func (s *Storage) DeleteChat(ctx context.Context, userID int64, chatID string) e
 	return tx.Commit()
 }
 
-func (s *Storage) SetFeedback(ctx context.Context, messageID string, userID int64, isPositive bool) (models.FeedbackResp, error) {
+func (s *Storage) SetFeedback(ctx context.Context, messageUUID string, userID int64, isPositive bool) (models.FeedbackResp, error) {
 	// 1) message exists, role=bot, not deleted, and belongs to user's chat
 	var role string
 	var isDeleted bool
@@ -263,9 +263,9 @@ func (s *Storage) SetFeedback(ctx context.Context, messageID string, userID int6
 	err := s.db.QueryRowContext(ctx, `
 		SELECT m.role, m.is_deleted, c.user_id
 		FROM messages m
-		JOIN chats c ON c.id = m.chat_id
-		WHERE m.id = $1
-	`, messageID).Scan(&role, &isDeleted, &chatOwner)
+		JOIN chats c ON c.chat_uuid = m.chat_uuid
+		WHERE m.message_uuid = $1::uuid
+	`, messageUUID).Scan(&role, &isDeleted, &chatOwner)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return models.FeedbackResp{}, httpAPI.ErrMessageNotFound
@@ -283,27 +283,44 @@ func (s *Storage) SetFeedback(ctx context.Context, messageID string, userID int6
 	}
 
 	// 2) model_id берём из чата (чтобы не доверять фронту)
-	var modelID string
+	var modelID int64
 	err = s.db.QueryRowContext(ctx, `
 		SELECT c.model_id
 		FROM messages m
-		JOIN chats c ON c.id = m.chat_id
-		WHERE m.id = $1
-	`, messageID).Scan(&modelID)
+		JOIN chats c ON c.chat_uuid = m.chat_uuid
+		WHERE m.message_uuid = $1::uuid
+	`, messageUUID).Scan(&modelID)
 	if err != nil {
 		return models.FeedbackResp{}, err
 	}
 
 	// 3) upsert feedback
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO message_feedbacks (message_id, user_id, model_id, is_positive)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (user_id, message_id)
+		INSERT INTO message_feedbacks (message_uuid, user_id, model_id, is_positive)
+		VALUES ($1::uuid, $2, $3, $4)
+		ON CONFLICT (user_id, message_uuid)
 		DO UPDATE SET is_positive = EXCLUDED.is_positive, updated_at = NOW()
-	`, messageID, userID, modelID, isPositive)
+	`, messageUUID, userID, modelID, isPositive)
 	if err != nil {
 		return models.FeedbackResp{}, err
 	}
 
-	return models.FeedbackResp{MessageID: messageID, IsPositive: isPositive}, nil
+	return models.FeedbackResp{MessageID: messageUUID, IsPositive: isPositive}, nil
+}
+
+func (s *Storage) InsertUserMessage(ctx context.Context, chatUUID, messageUUID, content string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO messages (message_uuid, chat_uuid, role, content)
+		VALUES ($1::uuid, $2::uuid, 'user', $3)
+		ON CONFLICT (message_uuid) DO NOTHING
+	`, messageUUID, chatUUID, content)
+	return err
+}
+
+func (s *Storage) InsertBotMessage(ctx context.Context, chatUUID, messageUUID, content, replyToUUID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO messages (message_uuid, chat_uuid, role, content, reply_to_message_id)
+		VALUES ($1::uuid, $2::uuid, 'bot', $3, $4::uuid)
+	`, messageUUID, chatUUID, content, replyToUUID)
+	return err
 }

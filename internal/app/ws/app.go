@@ -22,6 +22,24 @@ type App struct {
 	config    *config.Config
 }
 
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Для теста можно разрешить всем. Потом сузишь до нужного origin.
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		// preflight
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func New(
 	log *slog.Logger,
 	cfg *config.Config,
@@ -31,12 +49,14 @@ func New(
 	// Создаем HTTP сервер с WebSocket хендлером
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", wsHandler.HandleConnection)
-
+	mux.HandleFunc("/chats", httpAPI.Chats)     // POST /chats, GET /chats?user_id=...
+	mux.HandleFunc("/chats/", httpAPI.ChatByID) // GET /chats/{id}/messages, DELETE /chats/{id}
+	mux.HandleFunc("/messages/", httpAPI.MessageByID)
 	mux.HandleFunc("/health", healthHandler)
 
 	server := &http.Server{
 		Addr:         cfg.WEBSOCKET.URLWS,
-		Handler:      mux,
+		Handler:      withCORS(mux),
 		ReadTimeout:  cfg.WEBSOCKET.Timeout,
 		WriteTimeout: cfg.WEBSOCKET.Timeout,
 	}
