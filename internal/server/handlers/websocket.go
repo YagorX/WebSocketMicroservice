@@ -44,10 +44,59 @@ func NewWebSocketHandler(neuralClient *neural.Client, storage Storage) *WebSocke
 	return &WebSocketHandler{neuralClient: neuralClient, storage: storage}
 }
 
+// func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
+// 	const op = "WebSocketHandler.HandleConnection"
+
+// 	// 1. Всегда проверяем ошибку Upgrade
+// 	conn, err := upgrader.Upgrade(w, r, nil)
+// 	if err != nil {
+// 		log.Printf("%s: upgrade error: %v", op, err)
+// 		return
+// 	}
+// 	defer conn.Close()
+
+// 	// проверка понгов
+// 	conn.SetReadDeadline(time.Now().Add(pongWait))
+// 	conn.SetPongHandler(func(string) error {
+// 		conn.SetReadDeadline(time.Now().Add(pongWait))
+// 		return nil
+// 	})
+
+// 	// Горутина для пингов
+// 	go func() {
+// 		ticker := time.NewTicker(pingPeriod)
+// 		defer ticker.Stop()
+
+// 		for range ticker.C {
+// 			if err := conn.WriteControl(
+// 				websocket.PingMessage,
+// 				[]byte("ping"),
+// 				time.Now().Add(5*time.Second),
+// 			); err != nil {
+// 				log.Println("ping error, closing:", err)
+// 				conn.Close()
+// 				return
+// 			}
+// 		}
+// 	}()
+
+// 	// 2. Читаем сообщения
+// 	for {
+// 		_, message, err := conn.ReadMessage()
+// 		if err != nil {
+// 			log.Printf("%s: read error: %v", op, err)
+// 			return
+// 		}
+
+// 		// 3. Обработка сообщения
+// 		// go h.handleMessage(conn, message)
+// 		h.handleMessage(conn, message)
+// 	}
+// }
+
 func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Request) {
 	const op = "WebSocketHandler.HandleConnection"
 
-	// 1. Всегда проверяем ошибку Upgrade
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("%s: upgrade error: %v", op, err)
@@ -55,41 +104,54 @@ func (h *WebSocketHandler) HandleConnection(w http.ResponseWriter, r *http.Reque
 	}
 	defer conn.Close()
 
-	// проверка понгов
-	conn.SetReadDeadline(time.Now().Add(pongWait))
+	// канал завершения — остановит ping-горутину
+	done := make(chan struct{})
+	defer close(done)
+
+	// pong handler: продлеваем дедлайн чтения
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
-	// Горутина для пингов
+	// ping loop
 	go func() {
 		ticker := time.NewTicker(pingPeriod)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			if err := conn.WriteControl(
-				websocket.PingMessage,
-				[]byte("ping"),
-				time.Now().Add(5*time.Second),
-			); err != nil {
-				log.Println("ping error, closing:", err)
-				conn.Close()
+		for {
+			select {
+			case <-done:
 				return
+			case <-ticker.C:
+				// если соединение уже закрыто — просто выходим без шума
+				if err := conn.WriteControl(
+					websocket.PingMessage,
+					[]byte("ping"),
+					time.Now().Add(5*time.Second),
+				); err != nil {
+					return
+				}
 			}
 		}
 	}()
 
-	// 2. Читаем сообщения
+	// read loop
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			// Нормальные закрытия (refresh/close tab) — не логируем как ошибку
+			if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Printf("%s: client disconnected (%v)", op, err)
+				return
+			}
+			// Иногда прилетает net error типа "use of closed network connection"
 			log.Printf("%s: read error: %v", op, err)
 			return
 		}
 
-		// 3. Обработка сообщения
-		// go h.handleMessage(conn, message)
+		// важно: без go, чтобы не было гонок записи в conn
 		h.handleMessage(conn, message)
 	}
 }
