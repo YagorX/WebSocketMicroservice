@@ -36,19 +36,8 @@ func main() {
 	}
 
 	//инициализация подключения к беку
-	neuralClient := neural.NewClient(cfg.NEURALCLIENT.URLNeural, cfg.NEURALCLIENT.Timeout, storage)
+	neuralClient := neural.NewClient(cfg.NEURALCLIENT.URLNeural, cfg.NEURALCLIENT.Timeout)
 	log.Info("Neural service activate")
-
-	//инициализация подключения к auth
-	// authClient, err := auth.New(
-	// 	context.Background(),
-	// 	log,
-	// 	cfg.AUTH.URLAuth,
-	// 	cfg.AUTH.Timeout,
-	// 	cfg.AUTH.RetriesCount)
-	// if err != nil {
-	// 	log.Error("error with launch authclient")
-	// }
 
 	//создание бд, да плохо
 	httpApi := http.NewAPI(log, storage)

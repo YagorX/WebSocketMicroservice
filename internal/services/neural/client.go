@@ -23,16 +23,6 @@ import (
 // 	mutex   sync.Mutex
 // }
 
-type Storage interface {
-	CreateChat(ctx context.Context, req models.CreateChatReq) (models.CreateChatResp, error)
-	ListChats(ctx context.Context, userID int64) (models.ListChatsResp, error)
-	ListMessages(ctx context.Context, userID int64, chatID string) (models.ListMessagesResp, error)
-	DeleteChat(ctx context.Context, userID int64, chatID string) error
-	SetFeedback(ctx context.Context, messageID string, userID int64, isPositive bool) (models.FeedbackResp, error)
-	InsertUserMessage(ctx context.Context, chatUUID, messageUUID, content string) error
-	InsertBotMessage(ctx context.Context, chatUUID, messageUUID, content, replyToUUID string) error
-}
-
 type Client struct {
 	url     string
 	timeout time.Duration
@@ -42,7 +32,6 @@ type Client struct {
 	conn     *websocket.Conn
 	isReady  bool
 	stopConn context.CancelFunc
-	storage  Storage
 
 	// один writer
 	writeCh chan any
@@ -64,11 +53,10 @@ type typeMsg struct {
 	Type string `json:"type"`
 }
 
-func NewClient(neuralURL string, timeout time.Duration, svc Storage) *Client {
+func NewClient(neuralURL string, timeout time.Duration) *Client {
 	c := &Client{
 		url:     neuralURL,
 		timeout: timeout,
-		storage: svc,
 		writeCh: make(chan any, 256),
 		pending: make(map[string]chan result),
 	}
